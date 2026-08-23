@@ -1,0 +1,6 @@
+# 本应用仅依赖 Python 标准库（3.9+），无需安装任何包即可运行。
+#
+# 可选：安装 python-docx 可获得更规范的 Word 排版；
+# 不安装也可以正常导出 .docx（自动使用内置的轻量生成器）。
+#
+#   pip install python-docx

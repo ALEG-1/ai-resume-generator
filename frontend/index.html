@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>求职简历生成器</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="brand">📄 求职简历生成器</div>
+    <div class="actions">
+      <button id="btn-sample" class="btn ghost">🧪 填入示例</button>
+      <button id="btn-clear" class="btn ghost">🗑 清空</button>
+      <button id="btn-settings" class="btn ghost">⚙️ 设置</button>
+      <button id="btn-generate-all" class="btn primary">✨ AI 一键生成整篇</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- 左：表单 -->
+    <aside class="panel form-panel" id="form-panel">
+
+      <section class="card">
+        <h3>基本信息</h3>
+        <div class="grid2">
+          <label>姓名 <input id="f-name" placeholder="张三"></label>
+          <label>求职意向 / 目标岗位 <input id="f-target" placeholder="Python 后端开发工程师"></label>
+          <label>电话 <input id="f-phone" placeholder="138-0000-0000"></label>
+          <label>邮箱 <input id="f-email" placeholder="name@example.com"></label>
+          <label>城市 <input id="f-city" placeholder="上海"></label>
+          <label>个人主页 / GitHub <input id="f-links" placeholder="github.com/xxx"></label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>职业简介
+          <button class="btn mini ai" data-action="polish" data-type="summary">✨ AI 润色</button>
+        </h3>
+        <textarea id="f-summary" rows="3" placeholder="2~4 句：年限、核心技能、代表成果、目标方向"></textarea>
+      </section>
+
+      <section class="card" id="sec-education">
+        <h3>教育经历
+          <button class="btn mini add" data-action="add" data-type="education">＋ 添加</button>
+        </h3>
+        <div class="entries" data-list="education"></div>
+      </section>
+
+      <section class="card" id="sec-experience">
+        <h3>工作经历
+          <button class="btn mini add" data-action="add" data-type="experience">＋ 添加</button>
+        </h3>
+        <div class="entries" data-list="experience"></div>
+      </section>
+
+      <section class="card" id="sec-project">
+        <h3>项目经历
+          <button class="btn mini add" data-action="add" data-type="project">＋ 添加</button>
+        </h3>
+        <div class="entries" data-list="project"></div>
+      </section>
+
+      <section class="card">
+        <h3>技能特长
+          <button class="btn mini ai" data-action="polish" data-type="skills">✨ AI 提炼</button>
+        </h3>
+        <textarea id="f-skills" rows="4" placeholder="每行一项，例如：&#10;Python&#10;FastAPI / Django&#10;MySQL / Redis"></textarea>
+      </section>
+
+      <section class="card">
+        <h3>自我评价
+          <button class="btn mini ai" data-action="polish" data-type="self_assessment">✨ AI 润色</button>
+        </h3>
+        <textarea id="f-self" rows="3" placeholder="2~3 句个人特质与职业态度"></textarea>
+      </section>
+
+      <section class="card">
+        <h3>目标 JD（岗位描述）
+          <button class="btn mini ai" data-action="jd">🔍 AI 分析关键词</button>
+        </h3>
+        <textarea id="f-jd" rows="6" placeholder="粘贴目标岗位的招聘描述，AI 将提取关键词、给出匹配建议…"></textarea>
+        <div id="jd-result" class="jd-result hidden"></div>
+      </section>
+
+    </aside>
+
+    <!-- 右：预览 -->
+    <main class="panel preview-panel">
+      <div class="preview-toolbar">
+        <span class="tool-label">模板</span>
+        <select id="sel-template">
+          <option value="classic">经典单栏</option>
+          <option value="modern">现代双栏</option>
+        </select>
+        <span class="spacer"></span>
+        <button id="btn-export-md" class="btn ghost">⬇ Markdown</button>
+        <button id="btn-export-docx" class="btn ghost">⬇ Word</button>
+        <button id="btn-print" class="btn ghost">🖨 打印 / PDF</button>
+      </div>
+      <div class="preview-scroll">
+        <div id="resume-preview" class="resume template-classic"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- AI 进度浮层 -->
+  <div id="ai-overlay" class="overlay hidden">
+    <div class="overlay-card">
+      <div class="spinner"></div>
+      <div id="ai-status">AI 正在写作…</div>
+      <div id="ai-stream" class="ai-stream"></div>
+      <button id="btn-ai-close" class="btn ghost">取消</button>
+    </div>
+  </div>
+
+  <!-- 设置弹窗 -->
+  <div id="settings-modal" class="overlay hidden">
+    <div class="overlay-card modal">
+      <h3>⚙️ 模型设置</h3>
+      <p class="tip">任意 OpenAI 兼容接口均可；配置保存在本地 config.json，不会上传。</p>
+      <label>API Key
+        <input id="s-key" type="password" placeholder="sk-..." autocomplete="off">
+      </label>
+      <label>接口地址 base_url
+        <input id="s-base" placeholder="https://api.deepseek.com/v1">
+      </label>
+      <label>模型名称
+        <input id="s-model" placeholder="deepseek-chat">
+      </label>
+      <label>温度（0~2，越高越有创意）
+        <input id="s-temp" type="number" step="0.1" min="0" max="2" value="0.7">
+      </label>
+      <div class="preset-row">
+        <span class="preset-label">快速填充：</span>
+        <button class="btn mini" data-preset="deepseek">DeepSeek</button>
+        <button class="btn mini" data-preset="openai">OpenAI</button>
+        <button class="btn mini" data-preset="siliconflow">硅基流动</button>
+        <button class="btn mini" data-preset="moonshot">Kimi</button>
+        <button class="btn mini" data-preset="ollama">Ollama 本地</button>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-settings-save" class="btn primary">保存</button>
+        <button id="btn-settings-close" class="btn ghost">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
