@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from backend import docx_min, export, main  # noqa: E402
+from backend import docx_min, export, llm, main  # noqa: E402
 
 
 SAMPLE_RESUME = {
@@ -39,17 +39,17 @@ class TestJsonParse(unittest.TestCase):
     """模型输出 JSON 解析（容忍代码块围栏与前后杂质）。"""
 
     def test_plain(self):
-        self.assertEqual(main._parse_json('{"a": 1}'), {"a": 1})
+        self.assertEqual(llm.extract_json('{"a": 1}'), {"a": 1})
 
     def test_fenced(self):
-        self.assertEqual(main._parse_json('```json\n{"a": 1}\n```'), {"a": 1})
+        self.assertEqual(llm.extract_json('```json\n{"a": 1}\n```'), {"a": 1})
 
     def test_surrounded(self):
-        self.assertEqual(main._parse_json('前缀文字 {"a": 1} 后缀文字'), {"a": 1})
+        self.assertEqual(llm.extract_json('前缀文字 {"a": 1} 后缀文字'), {"a": 1})
 
     def test_invalid(self):
-        self.assertIsNone(main._parse_json("没有 json"))
-        self.assertIsNone(main._parse_json(""))
+        self.assertIsNone(llm.extract_json("没有 json"))
+        self.assertIsNone(llm.extract_json(""))
 
 
 class TestSseErrors(unittest.TestCase):
@@ -67,6 +67,22 @@ class TestSseErrors(unittest.TestCase):
     def test_unknown_mode(self):
         events = list(main._generate_events({"mode": "bogus"}))
         self.assertTrue(any("未知模式" in e for e in events), events)
+
+    def test_no_key_star(self):
+        events = list(main._generate_events({"mode": "star", "entry": {"star": {"action": "x"}}, "context": {}}))
+        self.assertTrue(any("event: error" in e and "未配置 API Key" in e for e in events), events)
+
+    def test_no_key_score(self):
+        events = list(main._generate_events({"mode": "score", "resume": {}, "jd": ""}))
+        self.assertTrue(any("event: error" in e and "未配置 API Key" in e for e in events), events)
+
+
+class TestLlmJson(unittest.TestCase):
+    def test_extract_json(self):
+        from backend import llm
+        self.assertEqual(llm.extract_json('{"a": 1}'), {"a": 1})
+        self.assertEqual(llm.extract_json('```json\n{"a": 1}\n```'), {"a": 1})
+        self.assertIsNone(llm.extract_json("no json"))
 
 
 class TestMarkdown(unittest.TestCase):
@@ -119,9 +135,11 @@ class TestHttpServer(unittest.TestCase):
     def setUpClass(cls):
         cls._orig_cfg = main.CONFIG_PATH
         cls._orig_out = main.OUTPUT_DIR
+        cls._orig_res = main.RESUMES_FILE
         cls._tmpdir = tempfile.TemporaryDirectory()
         main.CONFIG_PATH = Path(cls._tmpdir.name) / "config.json"
         main.OUTPUT_DIR = Path(cls._tmpdir.name) / "out"
+        main.RESUMES_FILE = Path(cls._tmpdir.name) / "resumes.json"
         cls.server = main.ThreadingHTTPServer(("127.0.0.1", 0), main.Handler)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -134,6 +152,7 @@ class TestHttpServer(unittest.TestCase):
         cls.thread.join(timeout=5)
         main.CONFIG_PATH = cls._orig_cfg
         main.OUTPUT_DIR = cls._orig_out
+        main.RESUMES_FILE = cls._orig_res
         cls._tmpdir.cleanup()
 
     def url(self, path):
@@ -188,6 +207,45 @@ class TestHttpServer(unittest.TestCase):
         text = body.decode("utf-8")
         self.assertIn("event: error", text)
         self.assertIn("未配置 API Key", text)
+
+    def test_resumes_crud(self):
+        # 保存（新建）
+        status, _, body = self.post_json("/api/resumes/save", {
+            "id": None, "name": "投字节", "data": {"template": "modern", "basic": {"name": "张三"}, "experiences": []}})
+        self.assertEqual(status, 200)
+        saved = json.loads(body.decode("utf-8"))
+        rid = saved["id"]
+        self.assertTrue(rid)
+        self.assertEqual(saved["name"], "投字节")
+        # 列表
+        with urllib.request.urlopen(self.url("/api/resumes"), timeout=10) as resp:
+            lst = json.loads(resp.read().decode("utf-8"))["resumes"]
+        self.assertEqual(len(lst), 1)
+        self.assertEqual(lst[0]["id"], rid)
+        # 读取
+        with urllib.request.urlopen(self.url(f"/api/resumes/{rid}"), timeout=10) as resp:
+            detail = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual(detail["data"]["basic"]["name"], "张三")
+        self.assertEqual(detail["data"]["template"], "modern")
+        # 更新
+        status, _, _ = self.post_json("/api/resumes/save", {
+            "id": rid, "name": "投字节v2", "data": {"basic": {"name": "张三"}, "summary": "改过了"}})
+        self.assertEqual(status, 200)
+        with urllib.request.urlopen(self.url(f"/api/resumes/{rid}"), timeout=10) as resp:
+            detail = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual(detail["name"], "投字节v2")
+        self.assertEqual(detail["data"]["summary"], "改过了")
+        # 删除
+        req = urllib.request.Request(self.url(f"/api/resumes/{rid}"), method="DELETE")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            self.assertEqual(resp.status, 200)
+        with urllib.request.urlopen(self.url("/api/resumes"), timeout=10) as resp:
+            lst = json.loads(resp.read().decode("utf-8"))["resumes"]
+        self.assertEqual(len(lst), 0)
+        # 404
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(self.url(f"/api/resumes/{rid}"), timeout=10)
+        self.assertEqual(ctx.exception.code, 404)
 
     def test_404(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:

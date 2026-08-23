@@ -5,8 +5,9 @@
 
 import json
 import mimetypes
-import re
 import sys
+import uuid
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -18,6 +19,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
 OUTPUT_DIR = BASE_DIR / "output"
 CONFIG_PATH = BASE_DIR / "config.json"
+RESUMES_DIR = BASE_DIR / "resumes"
+RESUMES_FILE = RESUMES_DIR / "resumes.json"
 
 DEFAULT_PORT = 8010
 
@@ -38,25 +41,54 @@ def _save_config(cfg: dict):
     CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), "utf-8")
 
 
+# ---------------- 简历库持久化 ----------------
+
+def _load_resumes() -> dict:
+    """返回 {id: {"id", "name", "updated_at", "data": {...}}}。"""
+    if RESUMES_FILE.exists():
+        try:
+            resumes = json.loads(RESUMES_FILE.read_text("utf-8"))
+            if isinstance(resumes, dict):
+                return resumes
+        except Exception:
+            pass
+    return {}
+
+
+def _save_resumes(resumes: dict):
+    RESUMES_DIR.mkdir(exist_ok=True)
+    RESUMES_FILE.write_text(json.dumps(resumes, ensure_ascii=False, indent=2), "utf-8")
+
+
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
 # ---------------- AI 生成（SSE 流式） ----------------
-
-def _parse_json(raw: str):
-    """从模型输出中提取 JSON 对象；容忍 ```json 围栏等杂质。"""
-    raw = (raw or "").strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
-    start, end = raw.find("{"), raw.rfind("}")
-    if start == -1 or end <= start:
-        return None
-    try:
-        return json.loads(raw[start:end + 1])
-    except Exception:
-        return None
-
 
 def _sse(event: str, data) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _stream_text_events(settings: dict, messages: list):
+    """流式文本生成：产出 ("delta"|"error", data) 事件；结束时产出 (None, 文本|None)。
+
+    text 为 None 表示已输出 error 事件（调用方应停止）。
+    """
+    parts = []
+    try:
+        for delta in llm.stream_chat(settings, messages, json_mode=False):
+            parts.append(delta)
+            yield ("delta", {"text": delta})
+    except llm.LLMError as e:
+        yield ("error", {"message": str(e)})
+        yield (None, None)
+        return
+    except Exception as e:  # noqa: BLE001
+        yield ("error", {"message": f"服务器错误：{e}"})
+        yield (None, None)
+        return
+    yield (None, "".join(parts).strip())
 
 
 def _generate_events(body: dict):
@@ -65,23 +97,71 @@ def _generate_events(body: dict):
     mode = body.get("mode")
     try:
         if mode == "full":
+            # 分步生成：简介 → 工作经历 → 项目经历 → 技能 → 自我评价，每步独立调用更稳定
             user_data = body.get("user_data", {})
-            messages = [
-                {"role": "system", "content": prompts.SYSTEM_RESUME_EXPERT},
-                {"role": "user", "content": prompts.build_full_resume_user_message(user_data)},
-            ]
-            parts = []
-            for delta in llm.stream_chat(settings, messages, json_mode=True):
-                parts.append(delta)
-                yield _sse("delta", {"text": delta})
-            parsed = _parse_json("".join(parts))
-            if parsed is None:
-                yield _sse("error", {
-                    "message": "模型输出无法解析为 JSON，请重试一次；若仍失败可换用更稳的模型（如 deepseek-chat）。",
-                    "raw": "".join(parts)[:8000],
-                })
-                return
-            yield _sse("result", {"mode": "full", "data": parsed})
+            sys_msg = {"role": "system", "content": prompts.SYSTEM_RESUME_EXPERT}
+
+            yield _sse("status", {"label": "第 1/5 步：撰写职业简介…"})
+            for event, data in _stream_text_events(settings, [
+                sys_msg, {"role": "user", "content": prompts.build_summary_message(user_data)}]):
+                if event is None:
+                    if data is None:
+                        return
+                    yield _sse("result", {"mode": "step", "section": "summary", "text": data})
+                    break
+                yield _sse(event, data)
+
+            experiences = user_data.get("experiences") or []
+            if experiences:
+                yield _sse("status", {"label": f"第 2/5 步：打磨工作经历（共 {len(experiences)} 条）…"})
+                for i, entry in enumerate(experiences):
+                    yield _sse("status", {"label": f"打磨工作经历 {i + 1}/{len(experiences)}…"})
+                    for event, data in _stream_text_events(settings, [
+                        sys_msg, {"role": "user",
+                                  "content": prompts.build_entry_bullets_message("experience", entry, user_data)}]):
+                        if event is None:
+                            if data is None:
+                                return
+                            yield _sse("result", {"mode": "step", "section": "experiences",
+                                                  "index": i, "text": data})
+                            break
+                        yield _sse(event, data)
+
+            projects = user_data.get("projects") or []
+            if projects:
+                yield _sse("status", {"label": f"第 3/5 步：打磨项目经历（共 {len(projects)} 条）…"})
+                for i, entry in enumerate(projects):
+                    yield _sse("status", {"label": f"打磨项目经历 {i + 1}/{len(projects)}…"})
+                    for event, data in _stream_text_events(settings, [
+                        sys_msg, {"role": "user",
+                                  "content": prompts.build_entry_bullets_message("project", entry, user_data)}]):
+                        if event is None:
+                            if data is None:
+                                return
+                            yield _sse("result", {"mode": "step", "section": "projects",
+                                                  "index": i, "text": data})
+                            break
+                        yield _sse(event, data)
+
+            yield _sse("status", {"label": "第 4/5 步：提炼技能清单…"})
+            for event, data in _stream_text_events(settings, [
+                sys_msg, {"role": "user", "content": prompts.build_skills_message(user_data)}]):
+                if event is None:
+                    if data is None:
+                        return
+                    yield _sse("result", {"mode": "step", "section": "skills", "text": data})
+                    break
+                yield _sse(event, data)
+
+            yield _sse("status", {"label": "第 5/5 步：撰写自我评价…"})
+            for event, data in _stream_text_events(settings, [
+                sys_msg, {"role": "user", "content": prompts.build_self_message(user_data)}]):
+                if event is None:
+                    if data is None:
+                        return
+                    yield _sse("result", {"mode": "step", "section": "self_assessment", "text": data})
+                    break
+                yield _sse(event, data)
 
         elif mode == "module":
             module = body.get("module")
@@ -91,11 +171,28 @@ def _generate_events(body: dict):
                 {"role": "system", "content": prompts.SYSTEM_MODULE_POLISH},
                 {"role": "user", "content": prompts.build_module_polish_message(module, entry, context)},
             ]
-            parts = []
-            for delta in llm.stream_chat(settings, messages, json_mode=False):
-                parts.append(delta)
-                yield _sse("delta", {"text": delta})
-            yield _sse("result", {"mode": "module", "module": module, "text": "".join(parts).strip()})
+            for event, data in _stream_text_events(settings, messages):
+                if event is None:
+                    if data is None:
+                        return
+                    yield _sse("result", {"mode": "module", "module": module, "text": data})
+                    return
+                yield _sse(event, data)
+
+        elif mode == "star":
+            entry = body.get("entry", {})
+            context = body.get("context", {})
+            messages = [
+                {"role": "system", "content": prompts.SYSTEM_STAR_INTEGRATE},
+                {"role": "user", "content": prompts.build_star_integrate_message(entry, context)},
+            ]
+            for event, data in _stream_text_events(settings, messages):
+                if event is None:
+                    if data is None:
+                        return
+                    yield _sse("result", {"mode": "module", "module": "star", "text": data})
+                    return
+                yield _sse(event, data)
 
         elif mode == "jd":
             jd = body.get("jd", "")
@@ -104,18 +201,50 @@ def _generate_events(body: dict):
                 {"role": "system", "content": prompts.SYSTEM_JD_ANALYSIS},
                 {"role": "user", "content": prompts.build_jd_analysis_message(jd, user_data)},
             ]
-            parts = []
-            for delta in llm.stream_chat(settings, messages, json_mode=True):
-                parts.append(delta)
-                yield _sse("delta", {"text": delta})
-            parsed = _parse_json("".join(parts))
-            if parsed is None:
-                yield _sse("error", {
-                    "message": "JD 分析结果无法解析，请重试。",
-                    "raw": "".join(parts)[:4000],
-                })
-                return
-            yield _sse("result", {"mode": "jd", "data": parsed})
+            for attempt in range(2):
+                parts = []
+                for delta in llm.stream_chat(settings, messages, json_mode=True, temperature=0.3):
+                    parts.append(delta)
+                    yield _sse("delta", {"text": delta})
+                raw = "".join(parts)
+                parsed = llm.extract_json(raw)
+                if parsed is not None:
+                    yield _sse("result", {"mode": "jd", "data": parsed})
+                    return
+                if attempt == 0:
+                    yield _sse("status", {"label": "输出格式有误，正在自动重试…"})
+                    messages = messages + [
+                        {"role": "assistant", "content": raw},
+                        {"role": "user", "content": "你上次的输出不是合法的 JSON。请只输出符合要求的 JSON 对象，"
+                                                    "不要 Markdown 代码块、不要任何解释文字。"},
+                    ]
+            yield _sse("error", {"message": "JD 分析结果无法解析，请重试。", "raw": raw[:4000]})
+
+        elif mode == "score":
+            resume = body.get("resume", {})
+            jd = body.get("jd", "")
+            messages = [
+                {"role": "system", "content": prompts.SYSTEM_SCORE},
+                {"role": "user", "content": prompts.build_score_message(resume, jd)},
+            ]
+            for attempt in range(2):
+                parts = []
+                for delta in llm.stream_chat(settings, messages, json_mode=True, temperature=0.3):
+                    parts.append(delta)
+                    yield _sse("delta", {"text": delta})
+                raw = "".join(parts)
+                parsed = llm.extract_json(raw)
+                if parsed is not None:
+                    yield _sse("result", {"mode": "score", "data": parsed})
+                    return
+                if attempt == 0:
+                    yield _sse("status", {"label": "输出格式有误，正在自动重试…"})
+                    messages = messages + [
+                        {"role": "assistant", "content": raw},
+                        {"role": "user", "content": "你上次的输出不是合法的 JSON。请只输出符合要求的 JSON 对象，"
+                                                    "不要 Markdown 代码块、不要任何解释文字。"},
+                    ]
+            yield _sse("error", {"message": "评分结果无法解析，请重试。", "raw": raw[:4000]})
 
         else:
             yield _sse("error", {"message": f"未知模式：{mode}"})
@@ -164,6 +293,12 @@ class Handler(BaseHTTPRequestHandler):
             return b""
         return self.rfile.read(length)
 
+    def _read_json_body(self):
+        try:
+            return json.loads(self._read_body() or b"{}")
+        except Exception:
+            return None
+
     # ---- GET ----
     def do_GET(self):
         path = urlparse(self.path).path
@@ -189,15 +324,29 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/settings":
             self._send_json(_load_config())
             return
+        if path == "/api/resumes":
+            resumes = _load_resumes()
+            lst = sorted(
+                ({"id": v["id"], "name": v["name"], "updated_at": v["updated_at"]} for v in resumes.values()),
+                key=lambda x: x["updated_at"], reverse=True)
+            self._send_json({"resumes": lst})
+            return
+        if path.startswith("/api/resumes/"):
+            rid = path.rsplit("/", 1)[-1]
+            resumes = _load_resumes()
+            if rid not in resumes:
+                self._send_error(404, "Not Found")
+                return
+            self._send_json(resumes[rid])
+            return
         self._send_error(404, "Not Found")
 
-    # ---- POST ----
+    # ---- POST / DELETE ----
     def do_POST(self):
         path = urlparse(self.path).path
         if path == "/api/settings":
-            try:
-                body = json.loads(self._read_body() or b"{}")
-            except Exception:
+            body = self._read_json_body()
+            if body is None:
                 self._send_error(400, "Bad JSON")
                 return
             _save_config({
@@ -214,12 +363,44 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/export":
             self._handle_export()
             return
+        if path == "/api/resumes/save":
+            self._handle_resume_save()
+            return
         self._send_error(404, "Not Found")
 
+    def do_DELETE(self):
+        path = urlparse(self.path).path
+        if path.startswith("/api/resumes/"):
+            rid = path.rsplit("/", 1)[-1]
+            resumes = _load_resumes()
+            if rid in resumes:
+                del resumes[rid]
+                _save_resumes(resumes)
+            self._send_json({"ok": True})
+            return
+        self._send_error(404, "Not Found")
+
+    def _handle_resume_save(self):
+        body = self._read_json_body()
+        if body is None:
+            self._send_error(400, "Bad JSON")
+            return
+        rid = str(body.get("id") or "").strip()
+        if not rid:
+            rid = uuid.uuid4().hex[:12]
+        name = str(body.get("name") or "").strip() or "未命名简历"
+        data = body.get("data")
+        if not isinstance(data, dict):
+            self._send_error(400, "Bad resume data")
+            return
+        resumes = _load_resumes()
+        resumes[rid] = {"id": rid, "name": name, "updated_at": _now(), "data": data}
+        _save_resumes(resumes)
+        self._send_json({"ok": True, "id": rid, "name": name, "updated_at": resumes[rid]["updated_at"]})
+
     def _handle_generate(self):
-        try:
-            body = json.loads(self._read_body() or b"{}")
-        except Exception:
+        body = self._read_json_body()
+        if body is None:
             self._send_error(400, "Bad JSON")
             return
         self.send_response(200)
@@ -242,9 +423,8 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def _handle_export(self):
-        try:
-            body = json.loads(self._read_body() or b"{}")
-        except Exception:
+        body = self._read_json_body()
+        if body is None:
             self._send_error(400, "Bad JSON")
             return
         fmt = body.get("fmt", "md")

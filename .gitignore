@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 output/
 config.json
+resumes/
 
 # 系统 / 编辑器
 .DS_Store

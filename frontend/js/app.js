@@ -2,8 +2,11 @@
 
 /* ================= 状态 ================= */
 const SAVE_KEY = "resume-app-state-v1";
+const ACTIVE_KEY = "resume-app-active-id";
 
 const state = {
+  id: null,                 // 当前简历 id（服务端简历库）
+  name: "未命名简历",
   template: "classic",
   basic: { name: "", target: "", phone: "", email: "", city: "", links: "" },
   summary: "",
@@ -14,6 +17,13 @@ const state = {
   self_assessment: "",
   jd: "",
   jdResult: null,
+  scoreResult: null,
+};
+
+const ui = {
+  library: [],              // [{id, name, updated_at}]
+  starOpen: new Set(),      // "type:idx" 集合，记录 STAR 引导是否展开
+  dirty: false,             // 是否有未保存修改
 };
 
 const AI = { running: false, abort: null, errorShown: false };
@@ -36,9 +46,37 @@ function toast(msg) {
   t._timer = setTimeout(() => t.classList.add("hidden"), 3200);
 }
 
-/* ================= 本地持久化 ================= */
+async function apiGet(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+async function apiPost(url, body) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+async function apiDelete(url) {
+  const r = await fetch(url, { method: "DELETE" });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+/* ================= 本地持久化（离线备份） ================= */
 function persist() {
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+  try {
+    const s = JSON.parse(JSON.stringify(state));
+    delete s.jdResult;
+    delete s.scoreResult;
+    localStorage.setItem(SAVE_KEY, JSON.stringify(s));
+    if (state.id) localStorage.setItem(ACTIVE_KEY, state.id);
+  } catch (e) { /* ignore */ }
 }
 
 function loadState() {
@@ -50,9 +88,11 @@ function loadState() {
       for (const k of ["educations", "experiences", "projects"]) {
         if (!Array.isArray(state[k])) state[k] = [];
       }
-      for (const k of ["summary", "skills", "self_assessment", "jd", "template"]) {
+      for (const k of ["summary", "skills", "self_assessment", "jd", "template", "name"]) {
         if (typeof state[k] !== "string" && k !== "template") state[k] = "";
       }
+      state.jdResult = null;
+      state.scoreResult = null;
     }
   } catch (e) { /* ignore */ }
 }
@@ -82,6 +122,9 @@ function collectEntries(type) {
   return [...box.querySelectorAll(".entry")].map((row) => {
     const item = {};
     for (const el of row.querySelectorAll("[data-f]")) item[el.dataset.f] = el.value;
+    const star = { situation: "", task: "", action: "", result: "" };
+    for (const el of row.querySelectorAll("[data-star]")) star[el.dataset.star] = el.value;
+    item.star = star;
     return item;
   });
 }
@@ -96,9 +139,10 @@ function writeForm() {
 
 /* ================= 动态条目 ================= */
 function emptyEntry(type) {
+  const star = { situation: "", task: "", action: "", result: "" };
   if (type === "education") return { school: "", major: "", degree: "", period: "", description: "" };
-  if (type === "experience") return { company: "", position: "", period: "", description: "" };
-  return { name: "", role: "", period: "", description: "" };
+  if (type === "experience") return { company: "", position: "", period: "", description: "", star };
+  return { name: "", role: "", period: "", description: "", star };
 }
 
 const ENTRY_FIELDS = {
@@ -111,6 +155,37 @@ function entryTemplate(type, item, index) {
   const fields = ENTRY_FIELDS[type]
     .map(([k, label]) => `<label>${label}<input data-f="${k}" value="${esc(item[k] || "")}"></label>`)
     .join("");
+
+  let starHtml = "";
+  if (type === "experience" || type === "project") {
+    const st = item.star || { situation: "", task: "", action: "", result: "" };
+    const open = ui.starOpen.has(`${type}:${index}`);
+    starHtml = `
+      <div class="star-box">
+        <div class="star-head">
+          <button class="btn mini" data-action="toggle-star" data-type="${type}" data-idx="${index}">
+            ⭐ STAR 引导${open ? "（收起）" : ""}
+          </button>
+          <span class="star-tip">按 情境/任务/行动/结果 填写素材，AI 自动整合成要点</span>
+          <button class="btn mini ai" data-action="star-integrate" data-type="${type}" data-idx="${index}">✨ 整合为要点</button>
+        </div>
+        <div class="star-fields${open ? "" : " hidden"}">
+          <label>情境 Situation（背景/现状）
+            <textarea data-star="situation" rows="2" placeholder="当时面临什么情况？">${esc(st.situation || "")}</textarea>
+          </label>
+          <label>任务 Task（目标/职责）
+            <textarea data-star="task" rows="2" placeholder="你负责什么？">${esc(st.task || "")}</textarea>
+          </label>
+          <label>行动 Action（你做了什么）
+            <textarea data-star="action" rows="3" placeholder="采取了哪些行动？用了什么技术/方法？">${esc(st.action || "")}</textarea>
+          </label>
+          <label>结果 Result（产出/影响）
+            <textarea data-star="result" rows="2" placeholder="带来了什么结果？尽量量化，如提升 X%、缩短到 Y 天">${esc(st.result || "")}</textarea>
+          </label>
+        </div>
+      </div>`;
+  }
+
   return `
     <div class="entry">
       <div class="entry-head">
@@ -121,6 +196,7 @@ function entryTemplate(type, item, index) {
       <label>描述 / 成就（每行一条要点，可用数字量化）
         <textarea data-f="description" rows="4" placeholder="- 负责…，将…提升 X%&#10;- 主导…，覆盖…用户">${esc(item.description || "")}</textarea>
       </label>
+      ${starHtml}
     </div>`;
 }
 
@@ -133,6 +209,179 @@ function renderForm() {
   renderEntries("education");
   renderEntries("experience");
   renderEntries("project");
+}
+
+/* ================= 简历库 ================= */
+function renderResumeList() {
+  const box = $("#resume-list");
+  if (!box) return;
+  box.innerHTML = ui.library.map((r) => {
+    const active = r.id === state.id ? " active" : "";
+    const time = (r.updated_at || "").slice(11, 16);
+    return `<div class="resume-item${active}" data-id="${esc(r.id)}" title="${esc(r.name)}">
+      <span class="ri-name">${esc(r.name)}</span>
+      <span class="ri-time">${esc(time)}</span>
+    </div>`;
+  }).join("");
+}
+
+function setSaveStatus(text) {
+  const el = $("#save-status");
+  if (el) el.textContent = text;
+}
+
+let saveTimer = null;
+function scheduleSave() {
+  ui.dirty = true;
+  clearTimeout(saveTimer);
+  setSaveStatus("保存中…");
+  saveTimer = setTimeout(saveResumeNow, 800);
+}
+
+async function saveResumeNow() {
+  clearTimeout(saveTimer);
+  if (!ui.dirty) return;
+  ui.dirty = false;
+  try {
+    const res = await apiPost("/api/resumes/save", {
+      id: state.id, name: state.name, data: buildResumeData(),
+    });
+    state.id = res.id;
+    state.name = res.name;
+    const t = (res.updated_at || "").slice(11, 16);
+    setSaveStatus(`✓ ${t} 已保存`);
+    persist();
+    await refreshLibrary();
+  } catch (e) {
+    ui.dirty = true;
+    setSaveStatus("⚠ 保存失败");
+    toast("保存失败：" + e);
+  }
+}
+
+async function refreshLibrary() {
+  try {
+    const res = await apiGet("/api/resumes");
+    ui.library = res.resumes || [];
+  } catch (e) {
+    ui.library = [];
+  }
+  renderResumeList();
+}
+
+async function loadResume(id) {
+  if (ui.dirty) await saveResumeNow();
+  try {
+    const r = await apiGet(`/api/resumes/${id}`);
+    const d = r.data || {};
+    Object.assign(state, {
+      id: r.id, name: r.name || "未命名简历",
+      template: d.template || "classic",
+      basic: Object.assign({ name: "", target: "", phone: "", email: "", city: "", links: "" }, d.basic || {}),
+      summary: d.summary || "",
+      educations: d.educations || [],
+      experiences: d.experiences || [],
+      projects: d.projects || [],
+      skills: d.skills || "",
+      self_assessment: d.self_assessment || "",
+      jd: d.jd || "",
+      jdResult: null,
+      scoreResult: null,
+    });
+    ui.dirty = false;
+    writeForm();
+    renderForm();
+    renderPreview();
+    $("#jd-result").classList.add("hidden");
+    renderResumeList();
+    persist();
+  } catch (e) {
+    toast("加载简历失败：" + e);
+  }
+}
+
+async function newResume() {
+  if (ui.dirty) await saveResumeNow();
+  state.id = null;
+  state.name = `未命名简历 ${ui.library.length + 1}`;
+  state.template = "classic";
+  state.basic = { name: "", target: "", phone: "", email: "", city: "", links: "" };
+  state.summary = state.skills = state.self_assessment = state.jd = "";
+  state.educations = state.experiences = state.projects = [];
+  state.jdResult = null;
+  state.scoreResult = null;
+  ui.dirty = true;
+  writeForm();
+  renderForm();
+  renderPreview();
+  await saveResumeNow();
+}
+
+async function renameResume() {
+  const name = prompt("输入新的简历名称：", state.name || "");
+  if (name === null) return;
+  state.name = name.trim() || state.name;
+  ui.dirty = true;
+  await saveResumeNow();
+}
+
+async function duplicateResume() {
+  if (ui.dirty) await saveResumeNow();
+  try {
+    const res = await apiPost("/api/resumes/save", {
+      id: null, name: (state.name || "未命名简历") + " 副本", data: buildResumeData(),
+    });
+    state.id = res.id;
+    state.name = res.name;
+    ui.dirty = false;
+    await refreshLibrary();
+    toast("已创建副本");
+  } catch (e) {
+    toast("复制失败：" + e);
+  }
+}
+
+async function deleteResume() {
+  if (!state.id) { toast("当前简历尚未保存"); return; }
+  if (!confirm(`确定删除「${state.name}」？此操作不可恢复。`)) return;
+  try {
+    await apiDelete(`/api/resumes/${state.id}`);
+    ui.library = ui.library.filter((r) => r.id !== state.id);
+    renderResumeList();
+    if (ui.library.length) {
+      await loadResume(ui.library[0].id);
+    } else {
+      await newResume();
+    }
+  } catch (e) {
+    toast("删除失败：" + e);
+  }
+}
+
+async function initLibrary() {
+  try {
+    await refreshLibrary();
+    const activeId = localStorage.getItem(ACTIVE_KEY);
+    const target = ui.library.find((r) => r.id === activeId) || ui.library[0];
+    if (target) {
+      await loadResume(target.id);
+      return;
+    }
+    // 无简历：把本地旧数据迁移成第一份
+    const hasContent = state.basic.name || state.summary || state.experiences.length || state.projects.length || state.skills;
+    if (hasContent) {
+      state.id = null;
+      state.name = "我的简历";
+      ui.dirty = true;
+      await saveResumeNow();
+      toast("已将本地数据迁移到简历库");
+    } else {
+      await newResume();
+    }
+  } catch (e) {
+    // 服务端不可用：离线模式，继续用本地状态
+    toast("简历库加载失败，使用本地缓存（离线模式）");
+  }
 }
 
 /* ================= 预览渲染 ================= */
@@ -198,7 +447,11 @@ function renderPreview() {
 let renderTimer = null;
 function scheduleRender() {
   clearTimeout(renderTimer);
-  renderTimer = setTimeout(() => { renderPreview(); persist(); }, 200);
+  renderTimer = setTimeout(() => {
+    renderPreview();
+    persist();
+    scheduleSave();
+  }, 200);
 }
 
 /* ================= AI 调用（SSE 流式） ================= */
@@ -237,6 +490,7 @@ async function callAI(payload, handlers) {
         try { obj = JSON.parse(data); } catch (e) { continue; }
         if (event === "delta") handlers.onDelta?.(obj.text || "");
         else if (event === "result") handlers.onResult?.(obj);
+        else if (event === "status") handlers.onStatus?.(obj.label || "");
         else if (event === "error") handlers.onError?.(obj.message || "未知错误", obj.raw || "");
       }
     }
@@ -279,11 +533,11 @@ function showAiError(msg, raw) {
 }
 
 function setBusy(busy) {
-  for (const id of ["btn-generate-all", "btn-jd-analyze"]) {
+  for (const id of ["btn-generate-all", "btn-jd-analyze", "btn-score"]) {
     const el = document.getElementById(id);
     if (el) el.disabled = busy;
   }
-  for (const el of $$('[data-action="polish"]')) el.disabled = busy;
+  for (const el of $$('[data-action="polish"], [data-action="star-integrate"]')) el.disabled = busy;
 }
 
 function buildUserData() {
@@ -300,43 +554,69 @@ function buildUserData() {
   };
 }
 
+/* ================= 数据构建 ================= */
+function buildResumeData() {
+  const arr = (a) => a.map((x) => ({ ...x }));
+  return {
+    template: state.template,
+    basic: { ...state.basic },
+    summary: state.summary,
+    educations: arr(state.educations),
+    experiences: arr(state.experiences),
+    projects: arr(state.projects),
+    skills: state.skills,
+    self_assessment: state.self_assessment,
+    jd: state.jd,
+  };
+}
+
+function buildResumeForExport() {
+  const stripStar = (a) => a.map((x) => {
+    const { star, ...rest } = x;
+    return rest;
+  });
+  return {
+    basic: { ...state.basic },
+    summary: state.summary,
+    educations: stripStar(state.educations),
+    experiences: stripStar(state.experiences),
+    projects: stripStar(state.projects),
+    skills: state.skills,
+    self_assessment: state.self_assessment,
+  };
+}
+
 /* ================= AI 动作 ================= */
-function mergeEntries(orig, aiList, keys) {
-  if (!Array.isArray(aiList) || !orig.length) return orig;
-  const n = Math.min(orig.length, aiList.length);
-  const out = orig.map((o, i) => ({ ...o }));
-  for (let i = 0; i < n; i++) {
-    const a = aiList[i] || {};
-    for (const k of keys) {
-      if (a[k] !== undefined && String(a[k]).trim() !== "") out[i][k] = String(a[k]);
-    }
-    if (Array.isArray(a.bullets)) out[i].description = a.bullets.join("\n");
-    else if (a.description !== undefined) out[i].description = String(a.description);
-  }
-  return out;
+function applyStep(r) {
+  const text = (r.text || "").trim();
+  if (!text) return;
+  if (r.section === "summary") state.summary = text;
+  else if (r.section === "skills") state.skills = text;
+  else if (r.section === "self_assessment") state.self_assessment = text;
+  else if (r.section === "experiences" && state.experiences[r.index]) state.experiences[r.index].description = text;
+  else if (r.section === "projects" && state.projects[r.index]) state.projects[r.index].description = text;
+  writeForm();
+  renderForm();
+  renderPreview();
+  persist();
+  scheduleSave();
 }
 
 async function generateAll() {
   if (AI.running) return;
   collectForm();
-  showOverlay("AI 正在根据你的经历与 JD 撰写整份简历…");
+  showOverlay("AI 开始分步生成整篇简历…");
   await callAI(
     { mode: "full", user_data: buildUserData() },
     {
       onDelta: appendStream,
+      onStatus: (label) => {
+        $("#ai-status").textContent = label;
+        $("#ai-stream").textContent = "";
+      },
       onResult: (r) => {
-        const d = r.data || {};
-        if (d.summary) state.summary = String(d.summary);
-        if (Array.isArray(d.educations)) state.educations = mergeEntries(state.educations, d.educations, ["school", "major", "degree", "period"]);
-        if (Array.isArray(d.experiences)) state.experiences = mergeEntries(state.experiences, d.experiences, ["company", "position", "period"]);
-        if (Array.isArray(d.projects)) state.projects = mergeEntries(state.projects, d.projects, ["name", "role", "period"]);
-        if (Array.isArray(d.skills)) state.skills = d.skills.join("\n");
-        if (d.self_assessment) state.self_assessment = String(d.self_assessment);
-        writeForm();
-        renderForm();
-        renderPreview();
-        persist();
-        toast("✅ 已生成并填入表单，可继续手动微调");
+        if (r.mode === "step") applyStep(r);
+        else if (r.mode === "score") { state.scoreResult = r.data; renderScore(); }
       },
       onError: showAiError,
     }
@@ -375,7 +655,41 @@ async function startPolish(type, idx) {
         renderForm();
         renderPreview();
         persist();
+        scheduleSave();
         toast("✅ 润色完成");
+      },
+      onError: showAiError,
+    }
+  );
+  if (!AI.errorShown) hideOverlay();
+}
+
+async function startStarIntegrate(type, idx) {
+  if (AI.running) return;
+  collectForm();
+  const arr = state[type + "s"];
+  if (idx == null || !arr[idx]) { toast("没有可整合的条目"); return; }
+  const entry = arr[idx];
+  const star = entry.star || {};
+  if (![star.situation, star.task, star.action, star.result].some((v) => String(v || "").trim())) {
+    toast("请先展开 STAR 引导，填写至少一项素材");
+    return;
+  }
+  showOverlay(`AI 正在把 STAR 素材整合为「${type === "experience" ? "工作经历" : "项目经历"}」要点…`);
+  await callAI(
+    { mode: "star", entry, context: buildUserData() },
+    {
+      onDelta: appendStream,
+      onResult: (r) => {
+        const text = (r.text || "").trim();
+        if (!text) return;
+        arr[idx].description = text;
+        writeForm();
+        renderForm();
+        renderPreview();
+        persist();
+        scheduleSave();
+        toast("✅ 已整合为要点，可继续微调");
       },
       onError: showAiError,
     }
@@ -392,11 +706,37 @@ async function analyzeJd() {
     { mode: "jd", jd: state.jd, user_data: buildUserData() },
     {
       onDelta: appendStream,
+      onStatus: (label) => { $("#ai-status").textContent = label; },
       onResult: (r) => {
         state.jdResult = r.data || null;
         renderJdResult();
         persist();
         toast("✅ JD 分析完成");
+      },
+      onError: showAiError,
+    }
+  );
+  if (!AI.errorShown) hideOverlay();
+}
+
+async function analyzeScore() {
+  if (AI.running) return;
+  collectForm();
+  if (!state.basic.name && !state.summary && !state.experiences.length && !state.projects.length) {
+    toast("简历还是空的，先填写内容或点「🧪 填入示例」");
+    return;
+  }
+  showOverlay("AI 正在评审简历…");
+  await callAI(
+    { mode: "score", resume: buildResumeForExport(), jd: state.jd },
+    {
+      onDelta: appendStream,
+      onStatus: (label) => { $("#ai-status").textContent = label; },
+      onResult: (r) => {
+        state.scoreResult = r.data || null;
+        renderScore();
+        $("#score-modal").classList.remove("hidden");
+        toast("✅ 评分完成");
       },
       onError: showAiError,
     }
@@ -422,19 +762,32 @@ function renderJdResult() {
   box.classList.remove("hidden");
 }
 
-/* ================= 导出 ================= */
-function buildResumeForExport() {
-  return {
-    basic: { ...state.basic },
-    summary: state.summary,
-    educations: state.educations.map((x) => ({ ...x })),
-    experiences: state.experiences.map((x) => ({ ...x })),
-    projects: state.projects.map((x) => ({ ...x })),
-    skills: state.skills,
-    self_assessment: state.self_assessment,
-  };
+function renderScore() {
+  const box = $("#score-body");
+  const r = state.scoreResult;
+  if (!r) return;
+  const overall = Math.max(0, Math.min(100, Number(r.overall_score) || 0));
+  const dims = (r.dimensions || []).map((d) => {
+    const s = Math.max(0, Math.min(100, Number(d.score) || 0));
+    return `<div class="score-dim">
+      <div class="score-dim-head"><span>${esc(d.name || "")}</span><b>${s}</b></div>
+      <div class="bar"><i style="width:${s}%"></i></div>
+      <div class="score-dim-comment">${esc(d.comment || "")}</div>
+    </div>`;
+  }).join("");
+  const strengths = (r.strengths || []).map((s) => `<li>${esc(s)}</li>`).join("");
+  const suggestions = (r.suggestions || []).map((s) => `<li>${esc(s)}</li>`).join("");
+  box.innerHTML = `
+    <div class="score-overall">
+      <div class="score-num">${overall}<span>分</span></div>
+      <div class="bar big"><i style="width:${overall}%"></i></div>
+    </div>
+    ${dims ? `<div class="score-dims">${dims}</div>` : ""}
+    ${strengths ? `<div class="jd-list"><b>💪 亮点</b><ul>${strengths}</ul></div>` : ""}
+    ${suggestions ? `<div class="jd-list"><b>📈 改进建议</b><ul>${suggestions}</ul></div>` : ""}`;
 }
 
+/* ================= 导出 ================= */
 async function exportResume(fmt) {
   collectForm();
   const label = fmt === "docx" ? "Word" : "Markdown";
@@ -470,8 +823,7 @@ const PRESETS = {
 
 async function loadSettings() {
   try {
-    const r = await fetch("/api/settings");
-    const cfg = await r.json();
+    const cfg = await apiGet("/api/settings");
     $("#s-key").value = cfg.api_key || "";
     $("#s-base").value = cfg.base_url || PRESETS.deepseek.base;
     $("#s-model").value = cfg.model || PRESETS.deepseek.model;
@@ -486,16 +838,12 @@ async function saveSettings() {
     model: $("#s-model").value.trim(),
     temperature: parseFloat($("#s-temp").value) || 0.7,
   };
-  const r = await fetch("/api/settings", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (r.ok) {
+  try {
+    await apiPost("/api/settings", body);
     toast(body.api_key ? "✅ 设置已保存" : "✅ 已保存（未填 Key：Ollama 本地模式可用，其他服务需在生成前补填）");
     $("#settings-modal").classList.add("hidden");
-  } else {
-    toast("保存失败");
+  } catch (e) {
+    toast("保存失败：" + e);
   }
 }
 
@@ -515,6 +863,12 @@ const SAMPLE = {
   experiences: [{
     company: "某互联网公司", position: "后端开发工程师", period: "2021.07 - 至今",
     description: "- 负责订单系统重构，通过缓存与异步化将核心接口 QPS 从 2k 提升至 8k\n- 主导微服务拆分，上线后线上故障率下降 40%\n- 搭建基于 Prometheus + Grafana 的监控体系，告警响应时间缩短至 5 分钟内",
+    star: {
+      situation: "公司订单系统随业务增长频繁超时，高峰期核心接口 QPS 仅 2k",
+      task: "负责订单系统重构，提升吞吐量与稳定性",
+      action: "引入 Redis 缓存与异步消息队列，拆分为独立服务并搭建监控",
+      result: "QPS 提升至 8k，线上故障率下降 40%",
+    },
   }],
   projects: [{
     name: "智能客服机器人", role: "核心开发", period: "2022.03 - 2022.09",
@@ -527,10 +881,10 @@ const SAMPLE = {
 
 /* ================= 事件绑定 ================= */
 function bindEvents() {
-  // 表单输入 → 收集 + 防抖渲染
+  // 表单输入 → 收集 + 防抖渲染 + 自动保存
   $("#form-panel").addEventListener("input", () => { collectForm(); scheduleRender(); });
 
-  // 表单按钮（添加 / 删除 / AI 润色 / JD 分析）
+  // 表单按钮（添加 / 删除 / AI 润色 / STAR / JD 分析）
   $("#form-panel").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-action]");
     if (!btn) return;
@@ -538,45 +892,72 @@ function bindEvents() {
     collectForm();
     if (action === "add") {
       state[type + "s"].push(emptyEntry(type));
-      renderForm(); renderPreview(); persist();
+      renderForm(); renderPreview(); persist(); scheduleSave();
     } else if (action === "remove") {
       state[type + "s"].splice(Number(idx), 1);
-      renderForm(); renderPreview(); persist();
+      renderForm(); renderPreview(); persist(); scheduleSave();
     } else if (action === "polish") {
       startPolish(type, idx === undefined ? undefined : Number(idx));
     } else if (action === "jd") {
       analyzeJd();
+    } else if (action === "toggle-star") {
+      const key = `${type}:${idx}`;
+      if (ui.starOpen.has(key)) ui.starOpen.delete(key);
+      else ui.starOpen.add(key);
+      renderEntries(type);  // 重绘保持输入内容（collectForm 已同步）
+    } else if (action === "star-integrate") {
+      startStarIntegrate(type, Number(idx));
     }
   });
+
+  // 简历库
+  $("#resume-list").addEventListener("click", (e) => {
+    const item = e.target.closest(".resume-item");
+    if (item && item.dataset.id && item.dataset.id !== state.id) loadResume(item.dataset.id);
+  });
+  $("#btn-resume-new").addEventListener("click", newResume);
+  $("#btn-resume-rename").addEventListener("click", renameResume);
+  $("#btn-resume-duplicate").addEventListener("click", duplicateResume);
+  $("#btn-resume-delete").addEventListener("click", deleteResume);
 
   // 模板切换
   $("#sel-template").addEventListener("change", (e) => {
     state.template = e.target.value;
-    renderPreview(); persist();
+    renderPreview(); persist(); scheduleSave();
   });
 
   // 顶栏
   $("#btn-generate-all").addEventListener("click", generateAll);
   $("#btn-sample").addEventListener("click", () => {
     Object.assign(state, JSON.parse(JSON.stringify(SAMPLE)));
-    writeForm(); renderForm(); renderPreview(); renderJdResult(); persist();
+    ui.dirty = true;
+    writeForm(); renderForm(); renderPreview(); renderJdResult(); persist(); scheduleSave();
     toast("已填入示例数据");
   });
   $("#btn-clear").addEventListener("click", () => {
-    if (!confirm("确定清空所有内容？")) return;
+    if (!confirm("确定清空当前简历的所有内容？")) return;
     state.basic = { name: "", target: "", phone: "", email: "", city: "", links: "" };
     state.summary = state.skills = state.self_assessment = state.jd = "";
     state.educations = state.experiences = state.projects = [];
     state.jdResult = null;
+    state.scoreResult = null;
+    ui.dirty = true;
     writeForm(); renderForm(); renderPreview();
     $("#jd-result").classList.add("hidden");
-    persist();
+    persist(); scheduleSave();
   });
 
-  // 导出与打印
+  // 导出、评分与打印
+  $("#btn-score").addEventListener("click", analyzeScore);
   $("#btn-export-md").addEventListener("click", () => exportResume("md"));
   $("#btn-export-docx").addEventListener("click", () => exportResume("docx"));
   $("#btn-print").addEventListener("click", () => window.print());
+
+  // 评分弹窗
+  $("#btn-score-close").addEventListener("click", () => $("#score-modal").classList.add("hidden"));
+  $("#score-modal").addEventListener("click", (e) => {
+    if (e.target === $("#score-modal")) $("#score-modal").classList.add("hidden");
+  });
 
   // AI 浮层
   $("#btn-ai-close").addEventListener("click", () => {
@@ -612,6 +993,7 @@ function init() {
   if (state.jdResult) renderJdResult();
   bindEvents();
   loadSettings();
+  initLibrary();
 }
 
 document.addEventListener("DOMContentLoaded", init);

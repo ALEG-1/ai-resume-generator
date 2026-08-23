@@ -23,6 +23,17 @@
     <aside class="panel form-panel" id="form-panel">
 
       <section class="card">
+        <h3>📚 简历库 <span id="save-status" class="save-status"></span></h3>
+        <div id="resume-list" class="resume-list"></div>
+        <div class="resume-actions">
+          <button class="btn mini add" id="btn-resume-new">＋ 新建</button>
+          <button class="btn mini" id="btn-resume-rename">✏️ 重命名</button>
+          <button class="btn mini" id="btn-resume-duplicate">⧉ 复制</button>
+          <button class="btn mini del" id="btn-resume-delete">🗑 删除</button>
+        </div>
+      </section>
+
+      <section class="card">
         <h3>基本信息</h3>
         <div class="grid2">
           <label>姓名 <input id="f-name" placeholder="张三"></label>
@@ -95,6 +106,7 @@
           <option value="modern">现代双栏</option>
         </select>
         <span class="spacer"></span>
+        <button id="btn-score" class="btn ghost">📊 AI 评分</button>
         <button id="btn-export-md" class="btn ghost">⬇ Markdown</button>
         <button id="btn-export-docx" class="btn ghost">⬇ Word</button>
         <button id="btn-print" class="btn ghost">🖨 打印 / PDF</button>
@@ -143,6 +155,17 @@
       <div class="modal-actions">
         <button id="btn-settings-save" class="btn primary">保存</button>
         <button id="btn-settings-close" class="btn ghost">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 评分弹窗 -->
+  <div id="score-modal" class="overlay hidden">
+    <div class="overlay-card modal">
+      <h3>📊 AI 简历评分</h3>
+      <div id="score-body"></div>
+      <div class="modal-actions">
+        <button id="btn-score-close" class="btn ghost">关闭</button>
       </div>
     </div>
   </div>

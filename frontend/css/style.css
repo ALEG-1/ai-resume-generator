@@ -249,6 +249,45 @@ select { width: auto; }
 .jd-list li { margin-bottom: 3px; }
 .jd-list b { color: #111827; }
 
+/* ============ 简历库 ============ */
+.save-status { font-size: 11.5px; font-weight: 400; color: var(--muted); margin-left: auto; }
+.resume-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; max-height: 160px; overflow-y: auto; }
+.resume-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px;
+  cursor: pointer; font-size: 13px; background: #fbfcfe;
+  transition: all .15s ease;
+}
+.resume-item:hover { border-color: #c7d2fe; background: #f8faff; }
+.resume-item.active { border-color: var(--primary); background: #eff6ff; color: var(--primary-dark); font-weight: 600; }
+.ri-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ri-time { font-size: 11.5px; color: var(--muted); flex-shrink: 0; }
+.resume-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ============ STAR 引导 ============ */
+.star-box {
+  border-top: 1px dashed #d5dbe7; padding-top: 8px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.star-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.star-tip { font-size: 11.5px; color: var(--muted); flex: 1; }
+.star-fields {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  background: #fefce8; border: 1px solid #fde68a; border-radius: 8px; padding: 10px;
+}
+.star-fields label:nth-child(3) { grid-column: 1 / -1; }
+.star-fields textarea { font-size: 12.5px; }
+
+/* ============ 评分弹窗 ============ */
+.score-overall { text-align: center; margin-bottom: 14px; }
+.score-num { font-size: 40px; font-weight: 800; color: var(--primary); line-height: 1.1; }
+.score-num span { font-size: 15px; color: var(--muted); font-weight: 500; margin-left: 4px; }
+.bar.big { height: 12px; margin-top: 8px; }
+.score-dims { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.score-dim-head { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 2px; }
+.score-dim-head b { color: var(--primary); }
+.score-dim-comment { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
 /* Toast */
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
