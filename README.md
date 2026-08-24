@@ -18,6 +18,8 @@
 
 求职季利器：把你的经历结构化录入后，粘贴目标岗位 JD，AI 自动完成「关键词对齐 → 整篇重构 → 模块润色」，实时预览、一键导出——让简历更贴合岗位、更有说服力。
 
+> 📖 文档：🌏 [English](README.en.md) · 📘 [使用教程](docs/usage.md) · 🏗 [架构说明](docs/architecture.md) · 🔌 [API 文档](docs/api.md)
+
 **适合谁**
 - 正在求职，想针对不同岗位快速定制简历的人
 - 简历写不好、不知道如何量化成果的职场人
@@ -132,6 +134,7 @@ GitHub Actions 已配置 CI（`.github/workflows/ci.yml`），推送后在 Pytho
 │   └── js/app.js
 ├── tests/
 │   └── test_core.py         # unittest 测试套件
+├── docs/                    # 使用教程 / 架构说明 / API 文档
 ├── .github/workflows/ci.yml # GitHub Actions 持续集成
 ├── config.example.json      # 配置格式示例
 ├── output/                  # 导出文件目录（运行时自动创建，不入库）
