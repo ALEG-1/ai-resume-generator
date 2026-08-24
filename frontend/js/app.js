@@ -167,7 +167,8 @@ function entryTemplate(type, item, index) {
             ⭐ STAR 引导${open ? "（收起）" : ""}
           </button>
           <span class="star-tip">按 情境/任务/行动/结果 填写素材，AI 自动整合成要点</span>
-          <button class="btn mini ai" data-action="star-integrate" data-type="${type}" data-idx="${index}">✨ 整合为要点</button>
+          <button class="btn mini ai" data-action="star-integrate" data-type="${type}"
+            data-idx="${index}">✨ 整合为要点</button>
         </div>
         <div class="star-fields${open ? "" : " hidden"}">
           <label>情境 Situation（背景/现状）
@@ -180,7 +181,8 @@ function entryTemplate(type, item, index) {
             <textarea data-star="action" rows="3" placeholder="采取了哪些行动？用了什么技术/方法？">${esc(st.action || "")}</textarea>
           </label>
           <label>结果 Result（产出/影响）
-            <textarea data-star="result" rows="2" placeholder="带来了什么结果？尽量量化，如提升 X%、缩短到 Y 天">${esc(st.result || "")}</textarea>
+            <textarea data-star="result" rows="2"
+              placeholder="带来了什么结果？尽量量化，如提升 X%、缩短到 Y 天">${esc(st.result || "")}</textarea>
           </label>
         </div>
       </div>`;
@@ -194,7 +196,8 @@ function entryTemplate(type, item, index) {
       </div>
       <div class="grid2">${fields}</div>
       <label>描述 / 成就（每行一条要点，可用数字量化）
-        <textarea data-f="description" rows="4" placeholder="- 负责…，将…提升 X%&#10;- 主导…，覆盖…用户">${esc(item.description || "")}</textarea>
+        <textarea data-f="description" rows="4"
+          placeholder="- 负责…，将…提升 X%&#10;- 主导…，覆盖…用户">${esc(item.description || "")}</textarea>
       </label>
       ${starHtml}
     </div>`;
@@ -368,7 +371,8 @@ async function initLibrary() {
       return;
     }
     // 无简历：把本地旧数据迁移成第一份
-    const hasContent = state.basic.name || state.summary || state.experiences.length || state.projects.length || state.skills;
+    const hasContent = state.basic.name || state.summary
+      || state.experiences.length || state.projects.length || state.skills;
     if (hasContent) {
       state.id = null;
       state.name = "我的简历";
@@ -423,10 +427,12 @@ function buildPreviewHtml() {
   const secSummary = sectionHtml("职业简介", `<p class="r-summary">${esc(state.summary).replace(/\n/g, "<br>")}</p>`);
   const secExp = sectionHtml("工作经历", state.experiences.map((it) => entryHtml(it, "company", "position")).join(""));
   const secProj = sectionHtml("项目经历", state.projects.map((it) => entryHtml(it, "name", "role")).join(""));
-  const secEdu = sectionHtml("教育经历", state.educations.map((it) => entryHtml(it, "school", [it.major, it.degree].filter(Boolean).join(" · "))).join(""));
+  const secEdu = sectionHtml("教育经历", state.educations
+    .map((it) => entryHtml(it, "school", [it.major, it.degree].filter(Boolean).join(" · "))).join(""));
   const secSkills = sectionHtml("技能特长",
     state.skills.trim()
-      ? `<div class="r-skills">${state.skills.split("\n").map((s) => s.trim()).filter(Boolean).map((s) => `<span class="r-chip">${esc(s)}</span>`).join("")}</div>`
+      ? `<div class="r-skills">${state.skills.split("\n").map((s) => s.trim()).filter(Boolean)
+          .map((s) => `<span class="r-chip">${esc(s)}</span>`).join("")}</div>`
       : "");
   const secSelf = sectionHtml("自我评价", `<p class="r-summary">${esc(state.self_assessment).replace(/\n/g, "<br>")}</p>`);
 
@@ -862,7 +868,9 @@ const SAMPLE = {
   }],
   experiences: [{
     company: "某互联网公司", position: "后端开发工程师", period: "2021.07 - 至今",
-    description: "- 负责订单系统重构，通过缓存与异步化将核心接口 QPS 从 2k 提升至 8k\n- 主导微服务拆分，上线后线上故障率下降 40%\n- 搭建基于 Prometheus + Grafana 的监控体系，告警响应时间缩短至 5 分钟内",
+    description: "- 负责订单系统重构，通过缓存与异步化将核心接口 QPS 从 2k 提升至 8k\n"
+      + "- 主导微服务拆分，上线后线上故障率下降 40%\n"
+      + "- 搭建基于 Prometheus + Grafana 的监控体系，告警响应时间缩短至 5 分钟内",
     star: {
       situation: "公司订单系统随业务增长频繁超时，高峰期核心接口 QPS 仅 2k",
       task: "负责订单系统重构，提升吞吐量与稳定性",

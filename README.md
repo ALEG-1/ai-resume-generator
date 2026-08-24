@@ -9,7 +9,8 @@
 ![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![依赖](https://img.shields.io/badge/依赖-零依赖%20(仅标准库)-green)
 ![License](https://img.shields.io/badge/License-MIT-blue)
-![CI](https://img.shields.io/badge/CI-unittest%20%E2%9C%93-brightgreen)
+[![CI](https://github.com/ALEG-1/ai-resume-generator/actions/workflows/ci.yml/badge.svg)](https://github.com/ALEG-1/ai-resume-generator/actions/workflows/ci.yml)
+[![Stars](https://img.shields.io/github/stars/ALEG-1/ai-resume-generator?style=social)](https://github.com/ALEG-1/ai-resume-generator)
 
 </div>
 
